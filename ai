@@ -1,7 +1,7 @@
 # ==========================================================
-# AI TEXT CLASSIFIER V3
-# Author: OpenAI + User
-# Version: 3.0
+# AI TEXT CLASSIFIER V4 - FULL ORIGINAL + FIXED FEATURES
+# Author: OpenAI + User + Gemini
+# Version: 4.1 (100% Original logic + Fixed Interactive Learning & Praise)
 # ==========================================================
 
 import json
@@ -96,7 +96,19 @@ DEFAULT_BRAIN = {
         "should":2,
         "do":1,
         "does":1
-    }
+    },
+
+    # Dictionaries for topic analysis
+    "topic_tech": {
+        "code": 5, "programming": 5, "python": 5, "java": 5, "pc": 4, "computer": 4, "ai": 5
+    },
+    "topic_hobbies": {
+        "games": 4, "chess": 5, "drawing": 4, "origami": 5, "dnd": 5
+    },
+    "topic_daily": {
+        "school": 4, "morning": 3, "weather": 3, "food": 3
+    },
+    "custom_categories": {}
 
 }
 
@@ -125,6 +137,8 @@ conversation_history = []
 
 last_prediction = "Unknown"
 last_confidence = 0
+last_result_cache = None
+context_history = []
 
 # ----------------------------------------------------------
 # STATISTICS
@@ -199,7 +213,7 @@ def clean_text(text):
 
     text=text.lower()
 
-    text=re.sub(r"[^a-zA-Z\s']"," ",text)
+    text=re.sub(r"[^a-zA-Z\s'?]"," ",text)
 
     text=text.replace("n't","nt")
 
@@ -224,7 +238,7 @@ brain=load_brain()
 load_stats()
 
 print("="*50)
-print("AI TEXT CLASSIFIER V3")
+print("AI TEXT CLASSIFIER V4.1")
 print("="*50)
 print("Brain loaded.")
 print("Ready.")
@@ -296,6 +310,8 @@ def has_negation(words, index):
 
 def predict(text):
 
+    global context_history, last_result_cache
+
     words = clean_text(text)
 
 
@@ -309,16 +325,23 @@ def predict(text):
 
 
     matched_words=[]
+    unknown_words=[]
+    
+    has_question_mark = "?" in text
 
 
     for index,word in enumerate(words):
+
+        if word == "?":
+            continue
 
 
         result,confidence=find_best_match(word)
 
 
-        if result is None:
+        if result is None or confidence < 0.65:
 
+            unknown_words.append(word)
             continue
 
 
@@ -327,20 +350,9 @@ def predict(text):
 
 
 
-        # Ignore very bad matches
-
-        if confidence < 0.65:
-
-            continue
-
-
-
         power = brain[category][known_word]
 
 
-
-        # If negative word detected before
-        # change meaning
 
         if has_negation(words,index):
 
@@ -373,17 +385,24 @@ def predict(text):
     total=sum(scores.values())
 
 
-    if total==0:
+    if total==0 and not has_question_mark:
 
 
-        return {
+        res = {
 
             "prediction":"Unknown",
             "confidence":0,
             "scores":scores,
-            "matches":matched_words
+            "matches":matched_words,
+            "unknown_words":unknown_words,
+            "intent": "Unknown",
+            "emotion": "Unknown",
+            "topic": "Unknown",
+            "context": "None"
 
         }
+        last_result_cache = res
+        return res
 
 
 
@@ -399,11 +418,30 @@ def predict(text):
         /
         total
 
-    )*100
+    )*100 if total > 0 else 0
 
 
+    intent = "Question" if best_category == "question" or has_question_mark else "Statement"
+    if best_category == "greeting": intent = "Greeting"
 
-    return {
+    emotion = "Neutral"
+    if best_category == "positive": emotion = "Positive"
+    elif best_category == "negative": emotion = "Negative"
+
+    topic_scores = {k: v for k, v in scores.items() if k.startswith("topic_") or k == "custom_categories"}
+    best_topic = max(topic_scores, key=topic_scores.get) if sum(topic_scores.values()) > 0 else "General"
+
+    context = "No context"
+    if len(context_history) > 0:
+        context = f"Previous topic: {context_history[-1].replace('topic_', '')}"
+
+    if best_topic != "General":
+        context_history.append(best_topic)
+        if len(context_history) > 3:
+            context_history.pop(0)
+
+
+    result_dict = {
 
 
         "prediction":
@@ -419,10 +457,28 @@ def predict(text):
 
 
         "matches":
-            matched_words
+            matched_words,
+
+        "unknown_words":
+            unknown_words,
+
+        "intent":
+            intent,
+
+        "emotion":
+            emotion,
+
+        "topic":
+            best_topic.replace("topic_", "").capitalize(),
+
+        "context":
+            context
 
 
     }
+
+    last_result_cache = result_dict
+    return result_dict
 
 
 
@@ -457,6 +513,92 @@ def learn_word(word,category,weight=2):
 
 
     save_brain(brain)
+    save_stats()
+
+
+
+# ----------------------------------------------------------
+# INTERACTIVE LEARNING FOR UNKNOWN WORDS (FIXED)
+# ----------------------------------------------------------
+
+def interactive_learning(unknown_words):
+
+    for word in unknown_words:
+
+        if len(word) <= 2: 
+            continue
+
+        ans = input(f"\nAI: I don't know the word '{word}'. Do you want to teach me? (yes/no): ").lower()
+
+        if ans in ['yes', 'y']:
+
+            print(f"Available categories: {list(brain.keys())}")
+            category = input("Enter category name (existing or new): ").lower()
+
+            try:
+                weight = int(input("Enter weight from 1 to 5: "))
+            except:
+                weight = 2
+
+            learn_word(word, category, weight)
+            print(f"AI learned: '{word}' as '{category}' with weight {weight}.")
+
+
+
+# ----------------------------------------------------------
+# REEVALUATION FEATURE ("ARE YOU SURE?")
+# ----------------------------------------------------------
+
+def reevaluate_prediction():
+
+    if not last_result_cache:
+        print("AI: I have no recent predictions to reevaluate.")
+        return
+
+    print("\n[AI REEVALUATION]")
+    conf = last_result_cache["confidence"]
+
+    if conf >= 80:
+        print("AI: I checked my logic again. Yes, I am very confident in my answer.")
+    else:
+        scores = last_result_cache["scores"]
+        sorted_scores = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        
+        alt_category = "unknown"
+        if len(sorted_scores) > 1 and sorted_scores[1][1] > 0:
+            alt_category = sorted_scores[1][0]
+
+        print(f"AI: My confidence was only {conf}%.")
+        print(f"AI: Re-evaluating... I might have made a mistake. Alternative category could be: '{alt_category.capitalize()}'.")
+
+
+
+# ----------------------------------------------------------
+# FEEDBACK SYSTEM WITH PRAISE (UPDATED)
+# ----------------------------------------------------------
+
+def ask_feedback():
+
+    if not last_result_cache or last_result_cache["prediction"] == "Unknown":
+        return
+
+    ans = input("\nAI: Was my answer correct? (+ / - / skip): ").strip()
+
+    if ans == '+':
+        stats["correct_predictions"] += 1
+        print("AI: Great job! I did a great job—thanks for the confirmation!")
+    elif ans == '-':
+        stats["wrong_predictions"] += 1
+        print("AI: Understood. I am adjusting weights to avoid this mistake.")
+        
+        cat = last_result_cache["prediction"].lower()
+        if cat in brain:
+            for match in last_result_cache["matches"]:
+                word, known_word, matched_cat, confidence = match
+                if known_word in brain[matched_cat]:
+                    brain[matched_cat][known_word] = max(1, brain[matched_cat][known_word] - 1)
+        save_brain(brain)
+
     save_stats()
 
 
@@ -520,6 +662,11 @@ def show_analysis(result):
         self_check(result)
     )
 
+    print(f"Intent    : {result['intent']}")
+    print(f"Emotion   : {result['emotion']}")
+    print(f"Topic     : {result['topic']}")
+    print(f"Context   : {result['context']}")
+
 
 
     print("\nScores:")
@@ -527,11 +674,12 @@ def show_analysis(result):
 
     for category,value in result["scores"].items():
 
-        print(
-            category,
-            ":",
-            round(value,2)
-        )
+        if value > 0:
+            print(
+                category,
+                ":",
+                round(value,2)
+            )
 
 
 
@@ -581,10 +729,13 @@ history
     Show conversation history.
 
 save
-    Save AI memory.
+    Show/Save AI memory.
 
 reset
     Reset AI brain.
+
+sure
+    Ask AI to re-evaluate its last answer.
 
 exit
     Close AI.
@@ -662,6 +813,7 @@ Choose category:
 2 - negative
 3 - greeting
 4 - question
+5 - custom topic
 """
     )
 
@@ -677,7 +829,8 @@ Choose category:
         "1":"positive",
         "2":"negative",
         "3":"greeting",
-        "4":"question"
+        "4":"question",
+        "5":"custom"
 
     }
 
@@ -693,6 +846,9 @@ Choose category:
 
 
     category=categories[choice]
+    
+    if category == "custom":
+        category = "topic_" + input("Enter custom topic name: ").lower()
 
 
 
@@ -776,19 +932,10 @@ def handle_command(command):
 
     if command=="analysis":
 
-        if last_prediction:
-
-            print(
-                "Last prediction:",
-                last_prediction
-            )
-
-            print(
-                "Confidence:",
-                last_confidence,
-                "%"
-            )
-
+        if last_result_cache:
+            show_analysis(last_result_cache)
+        else:
+            print("No analysis available yet.")
         return True
 
 
@@ -816,6 +963,10 @@ def handle_command(command):
     if command=="reset":
 
         reset_ai()
+        return True
+        
+    if command=="sure" or command=="are you sure":
+        reevaluate_prediction()
         return True
 
 
@@ -921,6 +1072,8 @@ while True:
         self_check(result)
 
     )
+    
+    print(f"\n[Metadata] Intent: {result['intent']} | Emotion: {result['emotion']} | Topic: {result['topic']} | Context: {result['context']}")
 
 
 
@@ -934,8 +1087,6 @@ while True:
 
 
 
-    # Ask user for correction
-
     if result["prediction"]=="Unknown":
 
 
@@ -944,6 +1095,11 @@ while True:
             "\nAI does not understand."
 
         )
+
+    interactive_learning(result["unknown_words"])
+    ask_feedback()
+
+    save_stats()
 
 
     save_stats()
