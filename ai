@@ -1,0 +1,184 @@
+# Simple AI Text Classifier
+# AI with confidence and self-check
+
+import random
+
+
+# Training data
+training_data = {
+    "positive": [
+        "happy",
+        "great",
+        "love",
+        "good",
+        "amazing",
+        "excellent",
+        "nice",
+        "like"
+    ],
+
+    "negative": [
+        "sad",
+        "bad",
+        "hate",
+        "terrible",
+        "angry",
+        "worst",
+        "awful",
+        "dislike"
+    ]
+}
+
+
+# AI learning
+def train(data):
+    brain = {}
+
+    for category in data:
+        for word in data[category]:
+            brain[word] = category
+
+    return brain
+
+
+# Compare words (handles mistakes)
+def similarity(word1, word2):
+    same = 0
+
+    for letter in word1:
+        if letter in word2:
+            same += 1
+
+    return same / max(len(word1), len(word2))
+
+
+# AI prediction
+def predict(text, brain):
+
+    words = text.lower().split()
+
+    positive_score = 0
+    negative_score = 0
+
+
+    for word in words:
+
+        best_word = None
+        best_similarity = 0
+
+
+        for known_word in brain:
+
+            score = similarity(word, known_word)
+
+            if score > best_similarity:
+                best_similarity = score
+                best_word = known_word
+
+
+        if best_similarity >= 0.7:
+
+            if brain[best_word] == "positive":
+                positive_score += 1
+
+            elif brain[best_word] == "negative":
+                negative_score += 1
+
+
+    total = positive_score + negative_score
+
+
+    if total == 0:
+        return {
+            "text": "I don't understand this.",
+            "prediction": "Unknown",
+            "confidence": 0,
+            "positive": 0,
+            "negative": 0
+        }
+
+
+    positive_percent = (positive_score / total) * 100
+    negative_percent = (negative_score / total) * 100
+
+
+    if positive_percent > negative_percent:
+        prediction = "Positive"
+        confidence = positive_percent
+
+    else:
+        prediction = "Negative"
+        confidence = negative_percent
+
+
+    return {
+        "text":
+        "Prediction: " + prediction +
+        "\nPositive: " + str(round(positive_percent)) + "%" +
+        "\nNegative: " + str(round(negative_percent)) + "%",
+
+        "prediction": prediction,
+        "confidence": confidence,
+        "positive": positive_percent,
+        "negative": negative_percent
+    }
+
+
+
+# Start AI
+
+ai_brain = train(training_data)
+
+last_prediction = ""
+last_confidence = 0
+
+
+print("AI is ready!")
+print("Type 'exit' to stop.")
+
+
+while True:
+
+    user_text = input("\nYou: ").lower()
+
+
+    if user_text == "exit":
+        print("AI: Goodbye!")
+        break
+
+
+
+    # Check confidence
+    if "are you sure" in user_text:
+
+        if last_confidence >= 70:
+
+            print("AI: Yes, I am sure.")
+            print("My confidence is", round(last_confidence), "%")
+
+        else:
+
+            print("AI: I am not sure. I will change my prediction.")
+
+            if last_prediction == "Positive":
+                last_prediction = "Negative"
+
+            else:
+                last_prediction = "Positive"
+
+
+            print("New prediction:", last_prediction)
+
+        continue
+
+
+
+    result = predict(user_text, ai_brain)
+
+
+    print("\nAI:")
+    print(result["text"])
+
+
+    last_prediction = result["prediction"]
+    last_confidence = result["confidence"]
