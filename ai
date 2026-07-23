@@ -1,184 +1,950 @@
-# Simple AI Text Classifier
-# AI with confidence and self-check
+# ==========================================================
+# AI TEXT CLASSIFIER V3
+# Author: OpenAI + User
+# Version: 3.0
+# ==========================================================
 
-import random
+import json
+import os
+import re
+from difflib import SequenceMatcher
+from datetime import datetime
 
+# ----------------------------------------------------------
+# FILES
+# ----------------------------------------------------------
 
-# Training data
-training_data = {
-    "positive": [
-        "happy",
-        "great",
-        "love",
-        "good",
-        "amazing",
-        "excellent",
-        "nice",
-        "like"
-    ],
+BRAIN_FILE = "brain.json"
+STATS_FILE = "stats.json"
 
-    "negative": [
-        "sad",
-        "bad",
-        "hate",
-        "terrible",
-        "angry",
-        "worst",
-        "awful",
-        "dislike"
-    ]
+# ----------------------------------------------------------
+# TRAINING DATA
+# ----------------------------------------------------------
+
+DEFAULT_BRAIN = {
+
+    "positive": {
+
+        "happy":5,
+        "great":5,
+        "good":4,
+        "love":5,
+        "excellent":5,
+        "awesome":5,
+        "fantastic":5,
+        "amazing":5,
+        "perfect":5,
+        "cool":3,
+        "nice":3,
+        "like":2,
+        "wonderful":5,
+        "best":5,
+        "beautiful":4,
+        "fun":3,
+        "brilliant":5,
+        "smart":4,
+        "yes":1,
+        "thanks":2,
+        "thank":2
+    },
+
+    "negative": {
+
+        "bad":4,
+        "hate":5,
+        "terrible":5,
+        "awful":5,
+        "worst":5,
+        "sad":4,
+        "angry":4,
+        "ugly":3,
+        "boring":3,
+        "annoying":4,
+        "stupid":4,
+        "disgusting":5,
+        "no":1,
+        "problem":2,
+        "pain":3,
+        "cry":3,
+        "fear":3,
+        "dislike":4
+    },
+
+    "greeting":{
+
+        "hello":3,
+        "hi":3,
+        "hey":3,
+        "welcome":3,
+        "morning":2,
+        "afternoon":2,
+        "evening":2,
+        "goodbye":3,
+        "bye":3
+    },
+
+    "question":{
+
+        "what":2,
+        "why":2,
+        "when":2,
+        "where":2,
+        "who":2,
+        "how":2,
+        "can":2,
+        "could":2,
+        "should":2,
+        "do":1,
+        "does":1
+    }
+
 }
 
+# ----------------------------------------------------------
+# NEGATION WORDS
+# ----------------------------------------------------------
 
-# AI learning
-def train(data):
-    brain = {}
+NEGATIONS = {
 
-    for category in data:
-        for word in data[category]:
-            brain[word] = category
+    "not",
+    "never",
+    "dont",
+    "don't",
+    "isnt",
+    "isn't",
+    "cant",
+    "can't",
+    "no"
+}
 
-    return brain
+# ----------------------------------------------------------
+# MEMORY
+# ----------------------------------------------------------
 
+conversation_history = []
 
-# Compare words (handles mistakes)
-def similarity(word1, word2):
-    same = 0
+last_prediction = "Unknown"
+last_confidence = 0
 
-    for letter in word1:
-        if letter in word2:
-            same += 1
+# ----------------------------------------------------------
+# STATISTICS
+# ----------------------------------------------------------
 
-    return same / max(len(word1), len(word2))
+stats = {
 
+    "messages":0,
+    "predictions":0,
+    "learned_words":0,
+    "correct_predictions":0,
+    "wrong_predictions":0,
+    "start_time":str(datetime.now())
 
-# AI prediction
-def predict(text, brain):
+}
 
-    words = text.lower().split()
+# ==========================================================
+# FILE FUNCTIONS
+# ==========================================================
 
-    positive_score = 0
-    negative_score = 0
+def save_brain(brain):
 
+    with open(BRAIN_FILE,"w",encoding="utf8") as file:
 
-    for word in words:
-
-        best_word = None
-        best_similarity = 0
-
-
-        for known_word in brain:
-
-            score = similarity(word, known_word)
-
-            if score > best_similarity:
-                best_similarity = score
-                best_word = known_word
-
-
-        if best_similarity >= 0.7:
-
-            if brain[best_word] == "positive":
-                positive_score += 1
-
-            elif brain[best_word] == "negative":
-                negative_score += 1
-
-
-    total = positive_score + negative_score
+        json.dump(
+            brain,
+            file,
+            indent=4
+        )
 
 
-    if total == 0:
+def load_brain():
+
+    if not os.path.exists(BRAIN_FILE):
+
+        save_brain(DEFAULT_BRAIN)
+
+    with open(BRAIN_FILE,"r",encoding="utf8") as file:
+
+        return json.load(file)
+
+
+def save_stats():
+
+    with open(STATS_FILE,"w",encoding="utf8") as file:
+
+        json.dump(
+            stats,
+            file,
+            indent=4
+        )
+
+
+def load_stats():
+
+    global stats
+
+    if not os.path.exists(STATS_FILE):
+
+        save_stats()
+
+    with open(STATS_FILE,"r",encoding="utf8") as file:
+
+        stats=json.load(file)
+
+
+# ==========================================================
+# TEXT FUNCTIONS
+# ==========================================================
+
+def clean_text(text):
+
+    text=text.lower()
+
+    text=re.sub(r"[^a-zA-Z\s']"," ",text)
+
+    text=text.replace("n't","nt")
+
+    words=text.split()
+
+    return words
+
+
+def similarity(word1,word2):
+
+    return SequenceMatcher(
+        None,
+        word1,
+        word2
+    ).ratio()
+
+# ==========================================================
+# LOAD EVERYTHING
+# ==========================================================
+
+brain=load_brain()
+load_stats()
+
+print("="*50)
+print("AI TEXT CLASSIFIER V3")
+print("="*50)
+print("Brain loaded.")
+print("Ready.")
+print("="*50)
+
+# ==========================================================
+# AI BRAIN ENGINE
+# ==========================================================
+
+
+# ----------------------------------------------------------
+# FIND BEST WORD MATCH
+# ----------------------------------------------------------
+
+def find_best_match(word):
+
+    best_word = None
+    best_score = 0
+
+    for category in brain:
+
+        for known_word in brain[category]:
+
+            score = similarity(
+                word,
+                known_word
+            )
+
+            if score > best_score:
+
+                best_score = score
+                best_word = (
+                    category,
+                    known_word
+                )
+
+    return best_word, best_score
+
+
+
+# ----------------------------------------------------------
+# CHECK NEGATION
+# ----------------------------------------------------------
+
+def has_negation(words, index):
+
+    start = max(
+        0,
+        index - 2
+    )
+
+    nearby_words = words[start:index]
+
+
+    for word in nearby_words:
+
+        if word in NEGATIONS:
+
+            return True
+
+
+    return False
+
+
+
+# ----------------------------------------------------------
+# PREDICTION SYSTEM
+# ----------------------------------------------------------
+
+def predict(text):
+
+    words = clean_text(text)
+
+
+    scores = {}
+
+
+    for category in brain:
+
+        scores[category]=0
+
+
+
+    matched_words=[]
+
+
+    for index,word in enumerate(words):
+
+
+        result,confidence=find_best_match(word)
+
+
+        if result is None:
+
+            continue
+
+
+
+        category,known_word=result
+
+
+
+        # Ignore very bad matches
+
+        if confidence < 0.65:
+
+            continue
+
+
+
+        power = brain[category][known_word]
+
+
+
+        # If negative word detected before
+        # change meaning
+
+        if has_negation(words,index):
+
+
+            if category=="positive":
+
+                category="negative"
+
+
+            elif category=="negative":
+
+                category="positive"
+
+
+
+        scores[category]+=power*confidence
+
+
+        matched_words.append(
+            (
+                word,
+                known_word,
+                category,
+                round(confidence,2)
+            )
+        )
+
+
+
+    total=sum(scores.values())
+
+
+    if total==0:
+
+
         return {
-            "text": "I don't understand this.",
-            "prediction": "Unknown",
-            "confidence": 0,
-            "positive": 0,
-            "negative": 0
+
+            "prediction":"Unknown",
+            "confidence":0,
+            "scores":scores,
+            "matches":matched_words
+
         }
 
 
-    positive_percent = (positive_score / total) * 100
-    negative_percent = (negative_score / total) * 100
+
+    best_category=max(
+        scores,
+        key=scores.get
+    )
 
 
-    if positive_percent > negative_percent:
-        prediction = "Positive"
-        confidence = positive_percent
+    confidence=(
 
-    else:
-        prediction = "Negative"
-        confidence = negative_percent
+        scores[best_category]
+        /
+        total
+
+    )*100
+
 
 
     return {
-        "text":
-        "Prediction: " + prediction +
-        "\nPositive: " + str(round(positive_percent)) + "%" +
-        "\nNegative: " + str(round(negative_percent)) + "%",
 
-        "prediction": prediction,
-        "confidence": confidence,
-        "positive": positive_percent,
-        "negative": negative_percent
+
+        "prediction":
+            best_category.capitalize(),
+
+
+        "confidence":
+            round(confidence,2),
+
+
+        "scores":
+            scores,
+
+
+        "matches":
+            matched_words
+
+
     }
 
 
 
-# Start AI
+# ----------------------------------------------------------
+# LEARNING SYSTEM
+# ----------------------------------------------------------
 
-ai_brain = train(training_data)
-
-last_prediction = ""
-last_confidence = 0
+def learn_word(word,category,weight=2):
 
 
-print("AI is ready!")
-print("Type 'exit' to stop.")
+    word=word.lower()
+
+
+
+    if category not in brain:
+
+        brain[category]={}
+
+
+
+    if word in brain[category]:
+
+        brain[category][word]+=weight
+
+
+    else:
+
+        brain[category][word]=weight
+
+
+    stats["learned_words"]+=1
+
+
+    save_brain(brain)
+    save_stats()
+
+
+
+# ----------------------------------------------------------
+# AI SELF CHECK
+# ----------------------------------------------------------
+
+def self_check(result):
+
+
+    confidence=result["confidence"]
+
+
+
+    if confidence>=80:
+
+        return "I am very confident."
+
+
+    elif confidence>=60:
+
+        return "I am moderately confident."
+
+
+    elif confidence>0:
+
+        return "I am not completely sure."
+
+
+    else:
+
+        return "I don't know yet."
+
+
+
+# ----------------------------------------------------------
+# SHOW DETAILS
+# ----------------------------------------------------------
+
+def show_analysis(result):
+
+
+    print("\n--- AI Analysis ---")
+
+
+    print(
+        "Prediction:",
+        result["prediction"]
+    )
+
+
+    print(
+        "Confidence:",
+        result["confidence"],
+        "%"
+    )
+
+
+    print(
+        self_check(result)
+    )
+
+
+
+    print("\nScores:")
+
+
+    for category,value in result["scores"].items():
+
+        print(
+            category,
+            ":",
+            round(value,2)
+        )
+
+
+
+    if result["matches"]:
+
+
+        print("\nMatched words:")
+
+
+        for item in result["matches"]:
+
+            print(
+                item
+            )
+
+
+    print("-------------------")
+    
+
+# ==========================================================
+# AI USER INTERFACE
+# ==========================================================
+
+
+# ----------------------------------------------------------
+# HELP MENU
+# ----------------------------------------------------------
+
+def show_help():
+
+    print("""
+================ AI COMMANDS ================
+
+help
+    Show this menu.
+
+stats
+    Show AI statistics.
+
+analysis
+    Show last prediction details.
+
+learn
+    Teach AI a new word.
+
+history
+    Show conversation history.
+
+save
+    Save AI memory.
+
+reset
+    Reset AI brain.
+
+exit
+    Close AI.
+
+=============================================
+""")
+
+
+
+# ----------------------------------------------------------
+# SHOW STATISTICS
+# ----------------------------------------------------------
+
+def show_stats():
+
+    print("\n=========== AI STATS ===========")
+
+    for key,value in stats.items():
+
+        print(
+            key,
+            ":",
+            value
+        )
+
+    print("===============================")
+
+
+
+# ----------------------------------------------------------
+# SHOW HISTORY
+# ----------------------------------------------------------
+
+def show_history():
+
+    print("\n======= CHAT HISTORY =======")
+
+    if len(conversation_history)==0:
+
+        print("No messages yet.")
+
+    else:
+
+        for message in conversation_history:
+
+            print(
+                message
+            )
+
+    print("============================")
+
+
+
+# ----------------------------------------------------------
+# TEACH AI
+# ----------------------------------------------------------
+
+def teach_ai():
+
+
+    print("\nTeaching mode")
+
+
+    word=input(
+        "Word: "
+    ).lower()
+
+
+
+    print(
+        """
+Choose category:
+
+1 - positive
+2 - negative
+3 - greeting
+4 - question
+"""
+    )
+
+
+    choice=input(
+        "Category: "
+    )
+
+
+
+    categories={
+
+        "1":"positive",
+        "2":"negative",
+        "3":"greeting",
+        "4":"question"
+
+    }
+
+
+    if choice not in categories:
+
+        print(
+            "Unknown category."
+        )
+
+        return
+
+
+
+    category=categories[choice]
+
+
+
+    learn_word(
+        word,
+        category,
+        3
+    )
+
+
+    print(
+        "AI learned:",
+        word,
+        "as",
+        category
+    )
+
+
+
+# ----------------------------------------------------------
+# RESET AI
+# ----------------------------------------------------------
+
+def reset_ai():
+
+    global brain
+
+
+    confirm=input(
+        "Delete all AI memory? (yes/no): "
+    )
+
+
+    if confirm=="yes":
+
+        brain=DEFAULT_BRAIN.copy()
+
+        save_brain(brain)
+
+
+        print(
+            "Brain reset."
+        )
+
+
+    else:
+
+        print(
+            "Cancelled."
+        )
+
+
+
+# ----------------------------------------------------------
+# HANDLE USER COMMANDS
+# ----------------------------------------------------------
+
+def handle_command(command):
+
+
+    if command=="help":
+
+        show_help()
+        return True
+
+
+
+    if command=="stats":
+
+        show_stats()
+        return True
+
+
+
+    if command=="history":
+
+        show_history()
+        return True
+
+
+
+    if command=="analysis":
+
+        if last_prediction:
+
+            print(
+                "Last prediction:",
+                last_prediction
+            )
+
+            print(
+                "Confidence:",
+                last_confidence,
+                "%"
+            )
+
+        return True
+
+
+
+    if command=="learn":
+
+        teach_ai()
+        return True
+
+
+
+    if command=="save":
+
+        save_brain(brain)
+        save_stats()
+
+        print(
+            "Saved."
+        )
+
+        return True
+
+
+
+    if command=="reset":
+
+        reset_ai()
+        return True
+
+
+
+    return False
+
+
+
+# ==========================================================
+# MAIN AI LOOP
+# ==========================================================
+
+
+print("\nAI is online.")
+print("Type 'help' to see commands.")
+
 
 
 while True:
 
-    user_text = input("\nYou: ").lower()
 
-
-    if user_text == "exit":
-        print("AI: Goodbye!")
-        break
+    user=input(
+        "\nYou: "
+    ).strip()
 
 
 
-    # Check confidence
-    if "are you sure" in user_text:
-
-        if last_confidence >= 70:
-
-            print("AI: Yes, I am sure.")
-            print("My confidence is", round(last_confidence), "%")
-
-        else:
-
-            print("AI: I am not sure. I will change my prediction.")
-
-            if last_prediction == "Positive":
-                last_prediction = "Negative"
-
-            else:
-                last_prediction = "Positive"
-
-
-            print("New prediction:", last_prediction)
+    if user=="":
 
         continue
 
 
 
-    result = predict(user_text, ai_brain)
+    if user=="exit":
+
+        print(
+            "AI: Goodbye!"
+        )
+
+        save_brain(brain)
+        save_stats()
+
+        break
 
 
-    print("\nAI:")
-    print(result["text"])
+
+    if handle_command(user.lower()):
+
+        continue
 
 
-    last_prediction = result["prediction"]
-    last_confidence = result["confidence"]
+
+    stats["messages"]+=1
+
+
+
+    conversation_history.append(
+
+        "User: "+user
+
+    )
+
+
+
+    result=predict(user)
+
+
+
+    last_prediction=result["prediction"]
+
+    last_confidence=result["confidence"]
+
+
+
+    stats["predictions"]+=1
+
+
+
+    print(
+        "\nAI:"
+    )
+
+
+    print(
+
+        "Prediction:",
+        result["prediction"]
+
+    )
+
+
+    print(
+
+        "Confidence:",
+        result["confidence"],
+        "%"
+
+    )
+
+
+    print(
+
+        self_check(result)
+
+    )
+
+
+
+    conversation_history.append(
+
+        "AI: "
+        +
+        result["prediction"]
+
+    )
+
+
+
+    # Ask user for correction
+
+    if result["prediction"]=="Unknown":
+
+
+        print(
+
+            "\nAI does not understand."
+
+        )
+
+
+    save_stats()
+
