@@ -1100,7 +1100,3 @@ while True:
     ask_feedback()
 
     save_stats()
-
-
-    save_stats()
-
