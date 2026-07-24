@@ -1,7 +1,7 @@
 # ==========================================================
 # AI TEXT CLASSIFIER V4 - FULL ORIGINAL + FIXED FEATURES
 # Author: OpenAI + User + Gemini
-# Version: 4.1 (100% Original logic + Fixed Interactive Learning & Praise)
+# Version: 5.1 (100% Original logic + Fixed Interactive Learning & Praise)
 # ==========================================================
 
 import json
@@ -9,6 +9,7 @@ import os
 import re
 from difflib import SequenceMatcher
 from datetime import datetime
+import copy
 
 # ----------------------------------------------------------
 # FILES
@@ -130,6 +131,43 @@ NEGATIONS = {
     "no"
 }
 
+STOP_WORDS = {
+
+    "i",
+    "you",
+    "he",
+    "she",
+    "it",
+    "we",
+    "they",
+    "am",
+    "is",
+    "are",
+    "was",
+    "were",
+    "the",
+    "a",
+    "an",
+    "to",
+    "of",
+    "and",
+    "or",
+    "my",
+    "your"
+
+}
+
+INTENSIFIERS = {
+
+    "very": 1.5,
+    "really": 1.5,
+    "extremely": 2,
+    "absolutely": 2,
+    "totally": 1.7,
+    "so": 1.3
+
+}
+
 # ----------------------------------------------------------
 # MEMORY
 # ----------------------------------------------------------
@@ -242,14 +280,24 @@ def clean_text(text):
 
     return words
 
+SIMILARITY_CACHE = {}
 
-def similarity(word1,word2):
+def similarity(word1, word2):
 
-    return SequenceMatcher(
+    key = (word1, word2)
+
+    if key in SIMILARITY_CACHE:
+        return SIMILARITY_CACHE[key]
+
+    score = SequenceMatcher(
         None,
         word1,
         word2
     ).ratio()
+
+    SIMILARITY_CACHE[key] = score
+
+    return score
 
 # ==========================================================
 # LOAD EVERYTHING
@@ -259,8 +307,33 @@ brain=load_brain()
 load_stats()
 load_context()
 
+# ==========================================================
+# FAST WORD INDEX + CACHE
+# ==========================================================
+
+word_index = {}
+
+def rebuild_index():
+
+    global word_index
+
+    word_index = {}
+
+    for category in brain:
+
+        if isinstance(brain[category], dict):
+
+            for word, weight in brain[category].items():
+
+                word_index[word] = (
+                    category,
+                    weight
+                )
+
+rebuild_index()
+
 print("="*50)
-print("AI TEXT CLASSIFIER V4.1")
+print("AI TEXT CLASSIFIER V5")
 print("="*50)
 print("Brain loaded.")
 print("Ready.")
@@ -277,12 +350,31 @@ print("="*50)
 
 def find_best_match(word):
 
+    # ---------- FAST EXACT SEARCH ----------
+
+    if word in word_index:
+
+        category, weight = word_index[word]
+
+        return (category, word), 1.0
+
+    # ---------- FUZZY SEARCH ----------
+
     best_word = None
     best_score = 0
 
+    word_len = len(word)
+
     for category in brain:
 
+        if not isinstance(brain[category], dict):
+            continue
+
         for known_word in brain[category]:
+
+            # пропускаем слишком разные слова
+            if abs(len(known_word) - word_len) > 3:
+                continue
 
             score = similarity(
                 word,
@@ -292,6 +384,7 @@ def find_best_match(word):
             if score > best_score:
 
                 best_score = score
+
                 best_word = (
                     category,
                     known_word
@@ -309,7 +402,7 @@ def has_negation(words, index):
 
     start = max(
         0,
-        index - 2
+        index - 3
     )
 
     nearby_words = words[start:index]
@@ -352,9 +445,15 @@ def predict(text):
     has_question_mark = "?" in text
 
 
-    for index,word in enumerate(words):
+    for index, word in enumerate(words):
 
         if word == "?":
+            continue
+
+        if word in STOP_WORDS:
+            continue
+
+        if word in INTENSIFIERS:
             continue
 
 
@@ -373,6 +472,17 @@ def predict(text):
 
 
         power = brain[category][known_word]
+
+
+        # усиление слова
+
+        if index > 0:
+
+            previous_word = words[index-1]
+
+            if previous_word in INTENSIFIERS:
+
+                power *= INTENSIFIERS[previous_word]
 
 
 
@@ -428,19 +538,40 @@ def predict(text):
 
 
 
-    best_category=max(
+    best_category = max(
         scores,
         key=scores.get
     )
 
 
-    confidence=(
+    sorted_scores = sorted(
+        scores.values(),
+        reverse=True
+    )
 
-        scores[best_category]
-        /
-        total
 
-    )*100 if total > 0 else 0
+    top_score = sorted_scores[0] if sorted_scores else 0
+
+
+    second_score = (
+        sorted_scores[1]
+        if len(sorted_scores) > 1
+        else 0
+    )
+
+
+    difference = top_score - second_score
+
+
+    confidence = min(
+        100,
+        (difference / (top_score + 1)) * 100
+    )
+
+
+    if confidence < 5:
+
+        best_category = "Unknown"
 
 
     intent = "Question" if best_category == "question" or has_question_mark else "Statement"
@@ -481,17 +612,22 @@ def predict(text):
         "matches":
             matched_words,
 
+
         "unknown_words":
             unknown_words,
+
 
         "intent":
             intent,
 
+
         "emotion":
             emotion,
 
+
         "topic":
             best_topic.replace("topic_", "").capitalize(),
+
 
         "context":
             context
@@ -499,7 +635,9 @@ def predict(text):
 
     }
 
+
     last_result_cache = result_dict
+
     return result_dict
 
 
@@ -536,6 +674,7 @@ def learn_word(word,category,weight=2):
 
     save_brain(brain)
     save_stats()
+    rebuild_index()
 
 
 
@@ -611,25 +750,112 @@ def reevaluate_prediction():
 
 def ask_feedback():
 
-    if not last_result_cache or last_result_cache["prediction"] == "Unknown":
+    if not last_result_cache:
         return
 
-    ans = input("\nAI: Was my answer correct? (+ / - / skip): ").strip()
+    if last_result_cache["prediction"] == "Unknown":
+        return
 
-    if ans == '+':
+    ans = input("\nAI: Was my answer correct? (+ / - / skip): ").strip().lower()
+
+    if ans == "+":
+
         stats["correct_predictions"] += 1
-        print("AI: Great job! I did a great job—thanks for the confirmation!")
-    elif ans == '-':
-        stats["wrong_predictions"] += 1
-        print("AI: Understood. I am adjusting weights to avoid this mistake.")
-        
-        cat = last_result_cache["prediction"].lower()
-        if cat in brain:
-            for match in last_result_cache["matches"]:
-                word, known_word, matched_cat, confidence = match
-                if known_word in brain[matched_cat]:
-                    brain[matched_cat][known_word] = max(1, brain[matched_cat][known_word] - 1)
+
+        print("AI: Great! Thanks for confirming.")
+
+        save_stats()
+        return
+
+
+    if ans != "-":
+
+        save_stats()
+        return
+
+
+    stats["wrong_predictions"] += 1
+
+    print("\nAI: I was wrong.")
+
+    print("\nChoose the correct category:\n")
+
+    categories = list(brain.keys())
+
+    for i, cat in enumerate(categories, 1):
+        print(f"{i}. {cat}")
+
+    choice = input("\nCategory number (Enter = skip): ").strip()
+
+    if not choice.isdigit():
+
+        save_stats()
+        return
+
+    idx = int(choice) - 1
+
+    if idx < 0 or idx >= len(categories):
+
+        save_stats()
+        return
+
+    correct_category = categories[idx]
+
+    changed = False
+
+    for match in last_result_cache["matches"]:
+
+        word, known_word, matched_cat, confidence = match
+
+        # ---------- уменьшить неправильный вес ----------
+
+        if known_word in brain.get(matched_cat, {}):
+
+            brain[matched_cat][known_word] = max(
+                1,
+                brain[matched_cat][known_word] - 1
+            )
+
+        # ---------- увеличить правильный ----------
+
+        if correct_category not in brain:
+
+            brain[correct_category] = {}
+
+        if known_word in brain[correct_category]:
+
+            brain[correct_category][known_word] += 2
+
+        else:
+
+            brain[correct_category][known_word] = 3
+
+        changed = True
+
+    # ---------- неизвестные слова ----------
+
+    for word in last_result_cache["unknown_words"]:
+
+        if len(word) <= 2:
+            continue
+
+        if word in brain[correct_category]:
+
+            brain[correct_category][word] += 2
+
+        else:
+
+            brain[correct_category][word] = 2
+
+        changed = True
+
+    if changed:
+
+        rebuild_index()
+
         save_brain(brain)
+
+        print("\nAI: Knowledge updated successfully.")
 
     save_stats()
 
@@ -730,6 +956,27 @@ def show_analysis(result):
 
     print("-------------------")
     
+# ----------------------------------------------------------
+# MULTI INTENT ANALYSIS
+# ----------------------------------------------------------
+
+def analyze_multiple_intents(text):
+
+    sentences = re.split(r'[.!?]', text)
+
+    results = []
+
+    for sentence in sentences:
+
+        sentence = sentence.strip()
+
+        if sentence:
+
+            results.append(
+                predict(sentence)
+            )
+
+    return results
 
 # ==========================================================
 # AI USER INTERFACE
@@ -922,7 +1169,9 @@ def reset_ai():
 
     if confirm=="yes":
 
-        brain=DEFAULT_BRAIN.copy()
+        brain = copy.deepcopy(DEFAULT_BRAIN)
+
+        rebuild_index()
 
         save_brain(brain)
 
@@ -964,6 +1213,7 @@ def import_brain():
             with open(filename, "r", encoding="utf8") as f:
                 brain = json.load(f)
             save_brain(brain)
+            rebuild_index()
             print(f"Brain successfully imported from {filename}.")
         except Exception as e:
             print(f"Import failed: {e}")
@@ -1111,7 +1361,23 @@ while True:
 
 
 
-    result=predict(user)
+    results = analyze_multiple_intents(user)
+
+    result = results[0]
+
+
+    if len(results) > 1:
+
+        print("\n[Multiple intents detected]")
+
+        for r in results:
+
+            print(
+                "-",
+                r["prediction"],
+                r["confidence"],
+                "%"
+            )
 
 
 
