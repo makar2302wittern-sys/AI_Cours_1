@@ -16,6 +16,7 @@ from datetime import datetime
 
 BRAIN_FILE = "brain.json"
 STATS_FILE = "stats.json"
+CONTEXT_FILE = "context.json"
 
 # ----------------------------------------------------------
 # TRAINING DATA
@@ -205,6 +206,26 @@ def load_stats():
         stats=json.load(file)
 
 
+def save_context():
+    with open(CONTEXT_FILE, "w", encoding="utf8") as file:
+        json.dump({
+            "context_history": context_history,
+            "conversation_history": conversation_history
+        }, file, indent=4)
+
+
+def load_context():
+    global context_history, conversation_history
+    if os.path.exists(CONTEXT_FILE):
+        try:
+            with open(CONTEXT_FILE, "r", encoding="utf8") as file:
+                data = json.load(file)
+                context_history = data.get("context_history", [])
+                conversation_history = data.get("conversation_history", [])
+        except:
+            pass
+
+
 # ==========================================================
 # TEXT FUNCTIONS
 # ==========================================================
@@ -236,6 +257,7 @@ def similarity(word1,word2):
 
 brain=load_brain()
 load_stats()
+load_context()
 
 print("="*50)
 print("AI TEXT CLASSIFIER V4.1")
@@ -541,6 +563,16 @@ def interactive_learning(unknown_words):
                 weight = 2
 
             learn_word(word, category, weight)
+            
+            # Feature 6: Auto synonym linking
+            for cat in brain:
+                if cat == category:
+                    continue
+                for kw, pw in brain[cat].items():
+                    if similarity(word, kw) >= 0.8:
+                        brain[category][word] = pw
+                        break
+
             print(f"AI learned: '{word}' as '{category}' with weight {weight}.")
 
 
@@ -737,6 +769,12 @@ reset
 sure
     Ask AI to re-evaluate its last answer.
 
+export
+    Export brain to a file.
+
+import
+    Import brain from a file.
+
 exit
     Close AI.
 
@@ -903,6 +941,38 @@ def reset_ai():
 
 
 # ----------------------------------------------------------
+# EXPORT / IMPORT
+# ----------------------------------------------------------
+
+def export_brain():
+    filename = input("Enter export filename (e.g., custom_brain.json): ").strip()
+    if not filename:
+        filename = "exported_brain.json"
+    try:
+        with open(filename, "w", encoding="utf8") as f:
+            json.dump(brain, f, indent=4)
+        print(f"Brain successfully exported to {filename}.")
+    except Exception as e:
+        print(f"Export failed: {e}")
+
+
+def import_brain():
+    global brain
+    filename = input("Enter import filename: ").strip()
+    if os.path.exists(filename):
+        try:
+            with open(filename, "r", encoding="utf8") as f:
+                brain = json.load(f)
+            save_brain(brain)
+            print(f"Brain successfully imported from {filename}.")
+        except Exception as e:
+            print(f"Import failed: {e}")
+    else:
+        print("File not found.")
+
+
+
+# ----------------------------------------------------------
 # HANDLE USER COMMANDS
 # ----------------------------------------------------------
 
@@ -951,6 +1021,7 @@ def handle_command(command):
 
         save_brain(brain)
         save_stats()
+        save_context()
 
         print(
             "Saved."
@@ -967,6 +1038,14 @@ def handle_command(command):
         
     if command=="sure" or command=="are you sure":
         reevaluate_prediction()
+        return True
+
+    if command=="export":
+        export_brain()
+        return True
+
+    if command=="import":
+        import_brain()
         return True
 
 
@@ -1008,6 +1087,7 @@ while True:
 
         save_brain(brain)
         save_stats()
+        save_context()
 
         break
 
@@ -1100,3 +1180,4 @@ while True:
     ask_feedback()
 
     save_stats()
+    save_context()
